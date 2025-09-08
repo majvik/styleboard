@@ -1,6 +1,25 @@
 export type BoardKey = 'moodboard' | 'styleboard';
 const API = import.meta.env.VITE_API_BASE || '/api';
 
+export async function uploadBlobToS3(board: BoardKey, id: string, blob: Blob, pass: string) {
+  const mime = blob.type || 'application/octet-stream';
+
+  // 1) просим у бэка presigned PUT
+  const sig = await fetch(`${API}?op=sign-upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-pass': pass },
+    body: JSON.stringify({ board, id, mime })
+  });
+  if (!sig.ok) throw new Error(await sig.text());
+  const { signedUrl, publicUrl } = await sig.json();
+
+  // 2) грузим прямо в S3 endpoint Supabase
+  const put = await fetch(signedUrl, { method: 'PUT', headers: { 'content-type': mime }, body: blob });
+  if (!put.ok) throw new Error(`upload failed ${put.status}`);
+
+  return { publicUrl };
+}
+
 export async function remoteLoad(board: BoardKey) {
   try {
     const r = await fetch(`${API}?op=list&board=${board}`);

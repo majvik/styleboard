@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from "react";
-import { remoteLoad, remoteSave, blobToDataURL } from './remote';
+import { remoteLoad, remoteSave, blobToDataURL, uploadBlobToS3 } from './remote';
 // inline CSS для прогресс-бара
 const SBProgressCSS = (
   <style>{`
@@ -1553,18 +1553,21 @@ function AppInner() {
     const { gw, gh } = cellsFromPxNoCrop(dim.w, dim.h);
     
     let url: string;
-    if (remoteReadyRef.current) {
-      url = await blobToDataURL(blob); // для БД — data:URL
+    const id = uid(); // используем ваш ID элемента
+    
+    if (remoteReadyRef.current && passRef.current) {
+      const { publicUrl } = await uploadBlobToS3(board as any, id, blob, passRef.current);
+      url = publicUrl; // ← http(s) ссылка, без data:
     } else {
-      const id = await idbPutBlob(blob); // твой текущий путь в IndexedDB
-      url = IDB_URL_PREFIX + id;
+      const idbId = await idbPutBlob(blob);
+      url = IDB_URL_PREFIX + idbId;
     }
 
     setItemsUndo(prev => {
       const curBoard = boardRef.current;
       const curW = WRef.current, curH = HRef.current;
       if (curBoard === 'moodboard') {
-        const it: SBItem = { id: uid(), url, kind: 'image', gx: 0, gy: 0, gw, gh, approved: false };
+        const it: SBItem = { id, url, kind: 'image', gx: 0, gy: 0, gw, gh, approved: false };
         const laid = reflowMoodboard([...prev, it], curW, curH, moodShuffleIntensity);
         showToast('Added', 'ok');
         // Добавляем натуральные размеры для moodboard
@@ -1577,7 +1580,7 @@ function AppInner() {
       const pos = findPlacementSnakePacked(prev, gw, gh, curW, curH);
       console.timeEnd('place');
       if (!pos) { showToast('Canvas size is limited', 'err'); return prev; }
-      const it: SBItem = { id: uid(), url, kind: 'image', gx: pos.gx, gy: pos.gy, gw, gh, approved: false };
+      const it: SBItem = { id, url, kind: 'image', gx: pos.gx, gy: pos.gy, gw, gh, approved: false };
       showToast('Added', 'ok');
       if (LOG.placement) {
         const idx = prev.length + 1;
@@ -1597,17 +1600,17 @@ function AppInner() {
     return placed;
   }
 
-  // Преобразуем локальные idb:// ссылки в data:URL (чтобы шарились между браузерами)
+  // Преобразуем локальные idb:// ссылки в S3 URLs (чтобы шарились между браузерами)
   async function upgradeIdbUrls(arr: SBItem[]): Promise<SBItem[]> {
     const next: SBItem[] = [];
     for (const it of arr) {
-      if (isIdbUrl(it.url)) {
+      if (isIdbUrl(it.url) && passRef.current) {
         const blob = await idbGetBlob(idFromIdbUrl(it.url));
         if (blob) {
-          const dataUrl = await blobToDataURL(blob);
-          next.push({ ...it, url: dataUrl });
+          const { publicUrl } = await uploadBlobToS3(it.board as any, it.id, blob, passRef.current);
+          next.push({ ...it, url: publicUrl });
         } else {
-          next.push(it); // не нашли blob — оставим как есть
+          next.push(it);
         }
       } else {
         next.push(it);
