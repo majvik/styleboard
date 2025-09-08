@@ -1,0 +1,30 @@
+{
+  "name": "website-styleboard",
+  "private": true,
+  "version": "0.1.1",
+  "type": "module",
+  "scripts": {
+    "predev": "pkill -f \"netlify.*functions:serve\" || true && pkill -f vite || true",
+    "dev": "dotenv -e .env -- concurrently -k \"vite\" \"dotenv -e .env -- netlify functions:serve --port 9999\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "pg": "^8.16.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
+    "dotenv-cli": "^10.0.0",
+    "netlify-cli": "^23.3.1",
+    "postcss": "^8.4.41",
+    "tailwindcss": "^3.4.9",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.2"
+  }
+}

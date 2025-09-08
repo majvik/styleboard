@@ -1,0 +1,19 @@
+{
+	"geolocation": {
+		"data": {
+			"city": "Simferopol",
+			"country": {
+				"code": "UA",
+				"name": "Ukraine"
+			},
+			"subdivision": {
+				"code": "43",
+				"name": "Crimea"
+			},
+			"timezone": "Europe/Simferopol",
+			"latitude": 44.9607,
+			"longitude": 34.1051
+		},
+		"timestamp": 1757356437510
+	}
+}
