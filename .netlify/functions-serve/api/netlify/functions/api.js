@@ -1400,7 +1400,7 @@ var require_cert_signatures = __commonJS({
 var require_sasl = __commonJS({
   "node_modules/pg/lib/crypto/sasl.js"(exports2, module2) {
     "use strict";
-    var crypto = require_utils2();
+    var crypto2 = require_utils2();
     var { signatureAlgorithmHashFromCertificate } = require_cert_signatures();
     function startSession(mechanisms, stream) {
       const candidates = ["SCRAM-SHA-256"];
@@ -1412,7 +1412,7 @@ var require_sasl = __commonJS({
       if (mechanism === "SCRAM-SHA-256-PLUS" && typeof stream.getPeerCertificate !== "function") {
         throw new Error("SASL: Mechanism SCRAM-SHA-256-PLUS requires a certificate");
       }
-      const clientNonce = crypto.randomBytes(18).toString("base64");
+      const clientNonce = crypto2.randomBytes(18).toString("base64");
       const gs2Header = mechanism === "SCRAM-SHA-256-PLUS" ? "p=tls-server-end-point" : stream ? "y" : "n";
       return {
         mechanism,
@@ -1447,20 +1447,20 @@ var require_sasl = __commonJS({
         const peerCert = stream.getPeerCertificate().raw;
         let hashName = signatureAlgorithmHashFromCertificate(peerCert);
         if (hashName === "MD5" || hashName === "SHA-1") hashName = "SHA-256";
-        const certHash = await crypto.hashByName(hashName, peerCert);
+        const certHash = await crypto2.hashByName(hashName, peerCert);
         const bindingData = Buffer.concat([Buffer.from("p=tls-server-end-point,,"), Buffer.from(certHash)]);
         channelBinding = bindingData.toString("base64");
       }
       const clientFinalMessageWithoutProof = "c=" + channelBinding + ",r=" + sv.nonce;
       const authMessage = clientFirstMessageBare + "," + serverFirstMessage + "," + clientFinalMessageWithoutProof;
       const saltBytes = Buffer.from(sv.salt, "base64");
-      const saltedPassword = await crypto.deriveKey(password, saltBytes, sv.iteration);
-      const clientKey = await crypto.hmacSha256(saltedPassword, "Client Key");
-      const storedKey = await crypto.sha256(clientKey);
-      const clientSignature = await crypto.hmacSha256(storedKey, authMessage);
+      const saltedPassword = await crypto2.deriveKey(password, saltBytes, sv.iteration);
+      const clientKey = await crypto2.hmacSha256(saltedPassword, "Client Key");
+      const storedKey = await crypto2.sha256(clientKey);
+      const clientSignature = await crypto2.hmacSha256(storedKey, authMessage);
       const clientProof = xorBuffers(Buffer.from(clientKey), Buffer.from(clientSignature)).toString("base64");
-      const serverKey = await crypto.hmacSha256(saltedPassword, "Server Key");
-      const serverSignatureBytes = await crypto.hmacSha256(serverKey, authMessage);
+      const serverKey = await crypto2.hmacSha256(saltedPassword, "Server Key");
+      const serverSignatureBytes = await crypto2.hmacSha256(serverKey, authMessage);
       session.message = "SASLResponse";
       session.serverSignature = Buffer.from(serverSignatureBytes).toString("base64");
       session.response = clientFinalMessageWithoutProof + ",p=" + clientProof;
@@ -3596,7 +3596,7 @@ var require_client = __commonJS({
     var Query2 = require_query();
     var defaults2 = require_defaults();
     var Connection2 = require_connection();
-    var crypto = require_utils2();
+    var crypto2 = require_utils2();
     var Client2 = class extends EventEmitter {
       constructor(config) {
         super();
@@ -3791,7 +3791,7 @@ var require_client = __commonJS({
       _handleAuthMD5Password(msg) {
         this._checkPgPass(async () => {
           try {
-            const hashedPassword = await crypto.postgresMd5PasswordHash(this.user, this.password, msg.salt);
+            const hashedPassword = await crypto2.postgresMd5PasswordHash(this.user, this.password, msg.salt);
             this.connection.password(hashedPassword);
           } catch (e) {
             this.emit("error", e);
@@ -4974,9 +4974,10 @@ var TypeOverrides = import_lib.default.TypeOverrides;
 var defaults = import_lib.default.defaults;
 
 // netlify/functions/api.ts
+var import_client_s3 = require("@aws-sdk/client-s3");
+var import_s3_request_presigner = require("@aws-sdk/s3-request-presigner");
 var pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // pooled + sslmode=require
   max: 5,
   idleTimeoutMillis: 3e4
 });
@@ -4985,14 +4986,31 @@ var CORS = {
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, x-pass"
 };
+var S3_ENDPOINT = process.env.S3_ENDPOINT;
+var S3_ACCESS_KEY = process.env.S3_ACCESS_KEY;
+var S3_SECRET_KEY = process.env.S3_SECRET_KEY;
+var S3_BUCKET = process.env.S3_BUCKET;
+var S3_REGION = process.env.S3_REGION || "us-east-1";
+var SUPABASE_PROJECT_URL = process.env.SUPABASE_PROJECT_URL;
+var s3 = new import_client_s3.S3Client({
+  region: S3_REGION,
+  credentials: { accessKeyId: S3_ACCESS_KEY, secretAccessKey: S3_SECRET_KEY },
+  endpoint: S3_ENDPOINT,
+  // https://...supabase.co/storage/v1/s3
+  forcePathStyle: true
+  // Важно для совместимости
+});
 async function ensureSchema() {
   await pool.query(`
     create table if not exists sb_items (
       id text primary key,
-      board text not null,
+      board text not null check (board in ('moodboard','styleboard')),
       url text not null,
-      kind text not null,
-      gx int not null, gy int not null, gw int not null, gh int not null,
+      kind text not null check (kind in ('image','video','site')),
+      gx double precision not null,
+      gy double precision not null,
+      gw double precision not null,
+      gh double precision not null,
       approved boolean not null default false,
       natw int, nath int, natr double precision,
       created_at timestamptz not null default now()
@@ -5000,28 +5018,61 @@ async function ensureSchema() {
     create index if not exists sb_items_board_idx on sb_items(board);
   `);
 }
+function pickHeader(headers, name) {
+  const n = name.toLowerCase();
+  for (const [k, v] of Object.entries(headers || {})) if (k.toLowerCase() === n) return v;
+  return void 0;
+}
+function cryptoRandom() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
 var handler = async (event) => {
   try {
     if (event.httpMethod === "OPTIONS") {
       return { statusCode: 204, headers: CORS, body: "" };
     }
-    const op = event.queryStringParameters?.op || "list";
-    const board = event.queryStringParameters?.board || (event.httpMethod === "POST" ? JSON.parse(event.body || "{}").board : "");
-    if (!board || board !== "moodboard" && board !== "styleboard") {
-      return { statusCode: 400, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: "bad board" }) };
+    const qs = event.queryStringParameters || {};
+    const op = qs.op || (event.httpMethod === "POST" ? "save" : "list");
+    if (op === "sign-upload" && event.httpMethod === "POST") {
+      const pass = pickHeader(event.headers, "x-pass") || "";
+      if (!process.env.WRITE_PASSWORD || pass !== process.env.WRITE_PASSWORD) {
+        return { statusCode: 401, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: "unauthorized" }) };
+      }
+      const body = event.body ? JSON.parse(event.body) : {};
+      const board2 = body.board === "styleboard" ? "styleboard" : "moodboard";
+      const id = body.id || cryptoRandom();
+      const mime = typeof body.mime === "string" && body.mime ? body.mime : "application/octet-stream";
+      const ext = mime.startsWith("image/") ? mime.split("/")[1] : "bin";
+      const objectKey = `${board2}/${id}.${ext}`;
+      const cmd = new import_client_s3.PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: objectKey,
+        ContentType: mime
+        // ВАЖНО: без ACL — Supabase Storage управляет публичностью на уровне bucket'а
+      });
+      const signedUrl = await (0, import_s3_request_presigner.getSignedUrl)(s3, cmd, { expiresIn: 60 * 5 });
+      const publicUrl = `${SUPABASE_PROJECT_URL}/storage/v1/object/public/${S3_BUCKET}/${objectKey}`;
+      return {
+        statusCode: 200,
+        headers: { ...CORS, "Content-Type": "application/json" },
+        body: JSON.stringify({ signedUrl, publicUrl, id, objectKey })
+      };
     }
     await ensureSchema();
+    let boardFromQS = qs.board || (event.body ? JSON.parse(event.body).board : "");
+    const board = boardFromQS === "styleboard" ? "styleboard" : "moodboard";
     if (op === "list" && event.httpMethod === "GET") {
       const { rows } = await pool.query(`select * from sb_items where board=$1 order by created_at asc`, [board]);
       return { statusCode: 200, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ items: rows }) };
     }
     if (op === "save" && event.httpMethod === "POST") {
-      const pass = event.headers["x-pass"] || event.headers["X-Pass"] || event.headers["x-Pass"];
+      const body = event.body ? JSON.parse(event.body) : {};
+      const pass = pickHeader(event.headers, "x-pass") || body.pass || "";
       if (!process.env.WRITE_PASSWORD || pass !== process.env.WRITE_PASSWORD) {
         return { statusCode: 401, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: "unauthorized" }) };
       }
-      const payload = JSON.parse(event.body || "{}");
-      const items = Array.isArray(payload.items) ? payload.items : [];
+      const items = Array.isArray(body.items) ? body.items : [];
       const client = await pool.connect();
       try {
         await client.query("begin");
@@ -5034,13 +5085,14 @@ var handler = async (event) => {
                board=excluded.board,url=excluded.url,kind=excluded.kind,
                gx=excluded.gx,gy=excluded.gy,gw=excluded.gw,gh=excluded.gh,
                approved=excluded.approved,natw=excluded.natw,nath=excluded.nath,natr=excluded.natr`,
-            [it.id, board, it.url, it.kind, it.gx, it.gy, it.gw, it.gh, !!it.approved, it.natw ?? null, it.nath ?? null, it.natr ?? null]
+            [it.id, it.board, it.url, it.kind, it.gx, it.gy, it.gw, it.gh, !!it.approved, it.natw ?? null, it.nath ?? null, it.natr ?? null]
           );
         }
         await client.query("commit");
       } catch (e) {
         await client.query("rollback");
-        throw e;
+        console.error("[api] save error", e);
+        return { statusCode: 500, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: "db", detail: String(e) }) };
       } finally {
         client.release();
       }
@@ -5048,12 +5100,8 @@ var handler = async (event) => {
     }
     return { statusCode: 405, headers: CORS, body: "Method not allowed" };
   } catch (e) {
-    console.error("[api] save error", e);
-    return {
-      statusCode: 500,
-      headers: { ...CORS, "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "db", detail: String(e) })
-    };
+    console.error("[api] fatal", e);
+    return { statusCode: 500, headers: { ...CORS, "Content-Type": "application/json" }, body: JSON.stringify({ error: "fatal", detail: String(e?.message || e) }) };
   }
 };
 // Annotate the CommonJS export names for ESM import in node:
