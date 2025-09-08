@@ -11,15 +11,26 @@ export async function remoteLoad(board: BoardKey) {
 }
 
 let saveTimer: number | undefined;
+
 export async function remoteSave(board: BoardKey, items: any[], pass: string | null) {
+  // если пароля нет — просто не отправляем (чтобы не было 401)
+  if (!pass) {
+    console.warn('[remoteSave] skipped: no password set');
+    return;
+  }
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(async () => {
-    await fetch(`${API}?op=save`, {
+    const res = await fetch(`${API}?op=save`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(pass ? { 'x-pass': pass } : {}) },
-      body: JSON.stringify({ board, items })
+      headers: { 'Content-Type': 'application/json', 'x-pass': pass },
+      // продублируем пароль в body (сервер его тоже понимает)
+      body: JSON.stringify({ board, items, pass })
     });
-  }, 400);
+    if (!res.ok) {
+      const t = await res.text().catch(()=>'');
+      console.warn('[remoteSave] failed', res.status, t);
+    }
+  }, 300);
 }
 
 // утилита для data:URL (для удалённого режима)

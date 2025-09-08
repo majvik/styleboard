@@ -1617,13 +1617,15 @@ function AppInner() {
   }
 
   // Мгновенная отправка без дебаунса (используем тот же API, что и в remote.ts)
-  async function flushToCloud(itemsNow: SBItem[], pass: string) {
+  async function flushToCloudNow(pass: string) {
     const API = (import.meta as any).env?.VITE_API_BASE || '/api';
-    await fetch(`${API}?op=save`, {
+    const payload = { board: boardRef.current, items: itemsRef.current, pass };
+    const r = await fetch(`${API}?op=save`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-pass': pass },
-      body: JSON.stringify({ board: boardRef.current, items: itemsNow })
+      body: JSON.stringify(payload)
     });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   }
 
   // Принудительная запись пустого списка в БД (для любого борда)
@@ -2028,9 +2030,9 @@ function AppInner() {
     }
   }, [board]);
   useEffect(() => {
-    saveBoard(board, items);                  // локальный кэш как раньше
-    if (remoteReadyRef.current) {
-      remoteSave(board, items, passRef.current); // плюс отправка в БД (если удалённый режим поднялся)
+    saveBoard(board, items);
+    if (remoteReadyRef.current && passRef.current) {
+      remoteSave(board as any, items as any[], passRef.current);
     }
   }, [board, items]);
 
@@ -2502,13 +2504,18 @@ function AppInner() {
                 sessionStorage.setItem('sb:pass', p);
                 remoteReadyRef.current = true;
 
+                // апгрейд idb:// → data:
                 const upgraded = await upgradeIdbUrls(itemsRef.current);
-                if (upgraded !== itemsRef.current) setItems(upgraded);
+                if (upgraded !== itemsRef.current) {
+                  setItems(upgraded);
+                  itemsRef.current = upgraded; // критично: обновили ref вручную, не ждём следующего тика
+                }
+
                 try {
-                  await flushToCloud(upgraded, p);
+                  await flushToCloudNow(p);     // шлём уже по актуальному ref
                   alert('Синхронизировано в БД');
-                } catch (e) {
-                  alert('Ошибка синхронизации в БД: ' + e);
+                } catch (e:any) {
+                  alert('Ошибка синхронизации в БД: ' + (e?.message || e));
                 }
               }}
               className="px-3 h-8 rounded-md text-xs border border-neutral-200 bg-neutral-200 text-neutral-900 hover:bg-white"
