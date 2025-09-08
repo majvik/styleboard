@@ -51,6 +51,7 @@ interface SBItem {
   natW?: number;       // пиксельная ширина исходного изображения
   natH?: number;       // пиксельная высота исходного изображения
   natR?: number;       // нат. аспект = natW / natH (кэш)
+  board?: BoardKey;    // опционально для дебага и будущих миграций
 }
 
 const GRID = 16;
@@ -1567,7 +1568,7 @@ function AppInner() {
       const curBoard = boardRef.current;
       const curW = WRef.current, curH = HRef.current;
       if (curBoard === 'moodboard') {
-        const it: SBItem = { id, url, kind: 'image', gx: 0, gy: 0, gw, gh, approved: false };
+        const it: SBItem = { id, url, kind: 'image', gx: 0, gy: 0, gw, gh, approved: false, board: boardRef.current };
         const laid = reflowMoodboard([...prev, it], curW, curH, moodShuffleIntensity);
         showToast('Added', 'ok');
         // Добавляем натуральные размеры для moodboard
@@ -1580,7 +1581,7 @@ function AppInner() {
       const pos = findPlacementSnakePacked(prev, gw, gh, curW, curH);
       console.timeEnd('place');
       if (!pos) { showToast('Canvas size is limited', 'err'); return prev; }
-      const it: SBItem = { id, url, kind: 'image', gx: pos.gx, gy: pos.gy, gw, gh, approved: false };
+      const it: SBItem = { id, url, kind: 'image', gx: pos.gx, gy: pos.gy, gw, gh, approved: false, board: boardRef.current };
       showToast('Added', 'ok');
       if (LOG.placement) {
         const idx = prev.length + 1;
@@ -2309,6 +2310,7 @@ function AppInner() {
           approved: false,
           // ▼ нат. размер — важен для getAspect()
           natW: s?.w, natH: s?.h, natR: (s && s.w > 0 && s.h > 0) ? (s.w/s.h) : undefined,
+          board: boardRef.current,
         };
         const laid = reflowMoodboard([...prev, it], curW, curH, moodShuffleIntensity);
         showToast('Added', 'ok');
@@ -2328,7 +2330,7 @@ function AppInner() {
       const pos = findPlacementSnakePacked(prev, gw, gh, curW, curH);
       console.timeEnd('place');
       if (!pos) { console.warn('[styleboard] no space'); showToast('Canvas size is limited', 'err'); return prev; }
-      const it: SBItem = { id: uid(), url: trimmed, kind, gx: pos.gx, gy: pos.gy, gw, gh, approved: false };
+      const it: SBItem = { id: uid(), url: trimmed, kind, gx: pos.gx, gy: pos.gy, gw, gh, approved: false, board: boardRef.current };
       showToast('Added', 'ok');
       if (LOG.placement) {
         const idx = prev.length + 1;
