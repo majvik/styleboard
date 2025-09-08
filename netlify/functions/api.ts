@@ -96,7 +96,11 @@ export const handler: Handler = async (event) => {
 
     return { statusCode: 405, headers: CORS, body: 'Method not allowed' };
   } catch (e: any) {
-    console.error('[api error]', e);
-    return { statusCode: 500, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify({ error: String(e?.message || e) }) };
+    console.error('[api] save error', e);
+    return {
+      statusCode: 500,
+      headers: { ...CORS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: 'db', detail: String(e) })
+    };
   }
 };
