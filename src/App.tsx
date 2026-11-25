@@ -1,26 +1,6 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from "react";
 import { remoteLoad, remoteSave, blobToDataURL, uploadBlobToS3 } from './remote';
-// inline CSS для прогресс-бара
-const SBProgressCSS = (
-  <style>{`
-    @keyframes sb-run { 
-      0% { background-position: 0 0; }
-      100% { background-position: 200% 0; }
-    }
-    .sb-progress{
-      background-image: repeating-linear-gradient(
-        45deg,
-        rgba(16,185,129,.35) 0px,
-        rgba(16,185,129,.35) 10px,
-        rgba(16,185,129,.6) 10px,
-        rgba(16,185,129,.6) 20px
-      );
-      background-size: 200% 100%;
-      animation: sb-run 1s linear infinite;
-    }
-  `}</style>
-);
-
+import { Check, ChevronDown, ClipboardPaste, Combine, Copy, ImagePlus, Link2, LoaderCircle, Minus, Plus, RotateCcw, Ruler, Save, Shuffle, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
 /**
  * Website Styleboard — Local (React + TS + Tailwind)
  * - Two boards (Moodboard / Styleboard)
@@ -229,7 +209,8 @@ function detectKind(url: string): ItemKind {
   if (u.startsWith('data:image/')) return 'image';
   if (u.startsWith('data:video/')) return 'video';
   if (/\.(png|jpe?g|gif|webp|avif|svg)$/.test(u)) return "image";
-  if (/\.(mp4|webm|ogg)$/.test(u)) return "video";
+  if (/\.(mp4|webm|ogg|ogv|mov)(?:$|[?#])/.test(url.toLowerCase())) return "video";
+  if (/^(www\.)?(youtube\.com|youtu\.be|vimeo\.com)\//.test(u.replace(/^https?:\/\//, ''))) return 'video';
   return "site";
 }
 
@@ -275,10 +256,11 @@ function validateVideoUrl(url: string): Promise<boolean> {
   });
 }
 async function validateUrl(u: string): Promise<boolean> {
-  if (!/^https?:\/\//i.test(u) && !u.startsWith('data:')) return false;
+  if (!/^https?:\/\//i.test(u)) return false;
   const kind = detectKind(u);
+  // Video URLs are references only: do not probe or embed their media payload.
+  if (kind === 'video') return true;
   if (kind === 'image') return validateImageUrl(u);
-  if (kind === 'video') return validateVideoUrl(u);
   return true; // сайт: проверим формат, доступность до загрузки не проверяем
 }
 
@@ -1504,15 +1486,44 @@ function computeEdgeShift(
 function AppInner() {
   const [board, setBoard] = useState<BoardKey>("moodboard");
   const [items, setItems] = useState<SBItem[]>(() => loadBoard("moodboard"));
+  const [mediaMenuOpen, setMediaMenuOpen] = useState(false);
+  const mediaMenuRef = useRef<HTMLDivElement | null>(null);
   // Только интенсивность для Moodboard
   const [moodShuffleIntensity, setMoodShuffleIntensity] = useState<number>(40); // 0..100
+  const [intensityDraft, setIntensityDraft] = useState<string | null>(null);
+
+  function commitIntensityDraft(rawValue: string) {
+    if (!rawValue.trim() || !Number.isFinite(Number(rawValue))) {
+      setIntensityDraft(null);
+      return;
+    }
+    const rounded = Math.round(Number(rawValue) / 10) * 10;
+    setMoodShuffleIntensity(Math.max(0, Math.min(100, rounded)));
+    setIntensityDraft(null);
+  }
+
+  useEffect(() => {
+    if (!mediaMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!mediaMenuRef.current?.contains(event.target as Node)) setMediaMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMediaMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mediaMenuOpen]);
 
   async function pasteLinkFromClipboard() {
     try {
       await ensureClipboardReadPermission();
       const text = (await navigator.clipboard.readText() || '').trim();
       if (!(await validateUrl(text))) {
-        showToast('Link is not avaliable', 'err');
+        showToast('Link is not available', 'err');
         return;
       }
       await addUrl(text);
@@ -1550,15 +1561,23 @@ function AppInner() {
   }
 
   async function addImageBlob(blob: Blob) {
-    const dim = await probeImageFromBlob(blob);
+    const mediaKind: ItemKind = blob.type.startsWith('image/') ? 'image' : blob.type.startsWith('video/') ? 'video' : 'site';
+    if (mediaKind === 'site') { showToast('Choose an image or video file', 'err'); return; }
+    const objectUrl = URL.createObjectURL(blob);
+    const dim = mediaKind === 'image' ? await probeImageFromBlob(blob) : await probeVideo(objectUrl);
+    URL.revokeObjectURL(objectUrl);
     const { gw, gh } = cellsFromPxNoCrop(dim.w, dim.h);
     
     let url: string;
     const id = uid(); // используем ваш ID элемента
+    if (mediaKind === 'video' && (!remoteReadyRef.current || !passRef.current)) {
+      showToast('Video uploads require configured cloud sync', 'err');
+      return;
+    }
     
     if (remoteReadyRef.current && passRef.current) {
-      const { publicUrl } = await uploadBlobToS3(board as any, id, blob, passRef.current);
-      url = publicUrl; // ← http(s) ссылка, без data:
+      const { publicUrl } = await uploadBlobToS3(board, id, blob, passRef.current);
+      url = publicUrl;
     } else {
       const idbId = await idbPutBlob(blob);
       url = IDB_URL_PREFIX + idbId;
@@ -1568,7 +1587,7 @@ function AppInner() {
       const curBoard = boardRef.current;
       const curW = WRef.current, curH = HRef.current;
       if (curBoard === 'moodboard') {
-        const it: SBItem = { id, url, kind: 'image', gx: 0, gy: 0, gw, gh, approved: false, board: boardRef.current };
+        const it: SBItem = { id, url, kind: mediaKind, gx: 0, gy: 0, gw, gh, approved: false, board: boardRef.current };
         const laid = reflowMoodboard([...prev, it], curW, curH, moodShuffleIntensity);
         showToast('Added', 'ok');
         // Добавляем натуральные размеры для moodboard
@@ -1581,7 +1600,7 @@ function AppInner() {
       const pos = findPlacementSnakePacked(prev, gw, gh, curW, curH);
       console.timeEnd('place');
       if (!pos) { showToast('Canvas size is limited', 'err'); return prev; }
-      const it: SBItem = { id, url, kind: 'image', gx: pos.gx, gy: pos.gy, gw, gh, approved: false, board: boardRef.current };
+      const it: SBItem = { id, url, kind: mediaKind, gx: pos.gx, gy: pos.gy, gw, gh, approved: false, board: boardRef.current };
       showToast('Added', 'ok');
       if (LOG.placement) {
         const idx = prev.length + 1;
@@ -1601,21 +1620,17 @@ function AppInner() {
     return placed;
   }
 
-  // Преобразуем локальные idb:// ссылки в S3 URLs (чтобы шарились между браузерами)
+  // Promote existing local images when remote sync is configured.
   async function upgradeIdbUrls(arr: SBItem[]): Promise<SBItem[]> {
     const next: SBItem[] = [];
     for (const it of arr) {
       if (isIdbUrl(it.url) && passRef.current) {
         const blob = await idbGetBlob(idFromIdbUrl(it.url));
-        if (blob) {
-          const { publicUrl } = await uploadBlobToS3(it.board as any, it.id, blob, passRef.current);
+        if (blob?.type.startsWith('image/')) {
+          const { publicUrl } = await uploadBlobToS3(it.board as BoardKey, it.id, blob, passRef.current);
           next.push({ ...it, url: publicUrl });
-        } else {
-          next.push(it);
-        }
-      } else {
-        next.push(it);
-      }
+        } else next.push(it);
+      } else next.push(it);
     }
     return next;
   }
@@ -1730,7 +1745,7 @@ function AppInner() {
       if (text && /^https?:\/\//i.test(text)) {
         e.preventDefault();
         if (!(await validateUrl(text))) {
-          showToast('Link is not avaliable', 'err');
+          showToast('Link is not available', 'err');
           return;
         }
         await addUrl(text);
@@ -1768,6 +1783,7 @@ function AppInner() {
   // remote functionality refs
   const passRef = useRef<string | null>(sessionStorage.getItem('sb:pass'));
   const remoteReadyRef = useRef<boolean>(false);
+  const [savingBoard, setSavingBoard] = useState(false);
 
   // единичный пуш в историю на старте перетаскивания
   const resizingRef = useRef(false);
@@ -1848,7 +1864,7 @@ function AppInner() {
 
   async function runHeavy(label: 'collect'|'shuffle', job: () => void) {
     if (heavyBusy || heavyCooldown) {
-      showToast(heavyBusy ? 'Выполняется…' : 'Подождите…', 'err');
+      showToast(heavyBusy ? 'Working…' : 'Please wait…', 'err');
       return;
     }
     setHeavyBusy(true);
@@ -2286,11 +2302,11 @@ function AppInner() {
     // перевод в клетки с привязкой к 16px
     let gw:number, gh:number;
     let s: {w:number; h:number} | null = null;
-    if (kind === 'site') {
+    if (kind === 'site' || kind === 'video') {
       gw = Math.ceil(TILE_IFRAME_W);  // 90
       gh = Math.ceil(TILE_IFRAME_H);  // 68
     } else {
-      s = kind==='image' ? await probeImage(trimmed) : await probeVideo(trimmed);
+      s = await probeImage(trimmed);
       const capped = capToMaxSide(s.w, s.h);
       ({ gw, gh } = cellsFromPxNoCrop(capped.w, capped.h));
       if (kind === 'image') {
@@ -2343,27 +2359,28 @@ function AppInner() {
 
 
   return (
-    <div className="h-screen w-screen bg-black text-neutral-200 select-none">
-      {SBProgressCSS}
+    <div className="sb-app h-screen w-screen bg-black text-neutral-200 select-none">
       {/* Top bar */}
-      <div className="fixed top-0 left-0 right-0 z-50 flex items-center gap-3 px-4 py-2 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur">
+      <div className="sb-toolbar fixed top-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border px-2 py-2">
 
         {/* Tabs */}
-        <div className="flex rounded-xl overflow-hidden border border-neutral-800">
+        <div className="sb-tabs flex rounded-full overflow-hidden border border-neutral-800" role="tablist" aria-label="Boards">
           {BOARD_KEYS.map((k) => (
             <button
               key={k}
               onClick={() => setBoard(k)}
-              className={`px-3 py-1.5 text-sm capitalize ${board===k?"bg-neutral-800 text-white":"text-neutral-300 hover:bg-neutral-900"}`}
+              role="tab" aria-selected={board===k}
+              className={`sb-tab rounded-full px-3 py-1.5 text-sm capitalize ${board===k?"is-active":""}`}
             >{k}</button>
           ))}
         </div>
 
-        {/* Canvas size + Paste + Collect */}
-        <div className="ml-2 flex items-center gap-2">
-          <label className="text-xs text-neutral-400">W</label>
+        {/* Canvas size controls occupy the settings slot at the top right. */}
+        <div className="sb-canvas-size ml-auto flex items-center gap-2">
+          <label className="sb-muted text-xs text-neutral-400">W</label>
           <input
             value={formW}
+            aria-label="Canvas width"
             onChange={(e)=>setFormW(e.target.value.replace(/[^\d]/g,""))}
             onBlur={()=>{
               if (board==='moodboard') {
@@ -2376,15 +2393,14 @@ function AppInner() {
               setRecalculatedW(null);
               setRecalculatedH(null);
             }}
-            className={`w-24 px-2 py-1.5 text-sm rounded bg-neutral-900 border outline-none focus:border-neutral-600 ${
-              outOfRange ? "border-red-700" : "border-neutral-800"
-            }`}
+            className={`sb-input w-24 px-2 py-1.5 text-sm rounded bg-neutral-900 border outline-none focus:border-neutral-600 ${outOfRange ? "sb-input-invalid" : ""}`}
             placeholder="px"
             inputMode="numeric"
           />
-          <label className="text-xs text-neutral-400">H</label>
+          <label className="sb-muted text-xs text-neutral-400">H</label>
           <input
             value={formH}
+            aria-label="Canvas height"
             onChange={(e)=>setFormH(e.target.value.replace(/[^\d]/g,""))}
             onBlur={()=>{
               if (board==='moodboard') {
@@ -2397,16 +2413,14 @@ function AppInner() {
               setRecalculatedW(null);
               setRecalculatedH(null);
             }}
-            className={`w-24 px-2 py-1.5 text-sm rounded bg-neutral-900 border outline-none focus:border-neutral-600 ${
-              outOfRange ? "border-red-700" : "border-neutral-800"
-            }`}
+            className={`sb-input w-24 px-2 py-1.5 text-sm rounded bg-neutral-900 border outline-none focus:border-neutral-600 ${outOfRange ? "sb-input-invalid" : ""}`}
             placeholder="px"
             inputMode="numeric"
           />
           <button 
             onClick={applyCanvasSize} 
             disabled={applyDisabled}
-            className={`px-3 h-8 rounded-md border text-xs ${
+            className={`sb-btn ${applyDisabled ? 'sb-btn-disabled' : hasRecalculated ? 'sb-btn-primary' : 'sb-btn-secondary'} px-3 h-8 rounded-md border text-xs ${
               applyDisabled
                 ? "opacity-50 cursor-not-allowed border-neutral-800 bg-neutral-900 text-neutral-500"
                 : hasRecalculated
@@ -2415,154 +2429,138 @@ function AppInner() {
             }`}
             title={
               applyDisabled 
-                ? (smallerThanCurrent ? "Размер меньше текущего (есть материалы)" : "Размер вне допустимого диапазона")
+                ? (smallerThanCurrent ? "Canvas cannot be smaller while items remain" : "Canvas size is out of range")
                 : hasRecalculated
-                  ? "Применить размер холста"
-                  : "Пересчитать значения"
+                  ? "Apply the new canvas size"
+                  : "Recalculate canvas values"
             }
           >
+            {hasRecalculated ? <Check size={14} aria-hidden="true" /> : <Ruler size={14} aria-hidden="true" />}
             {hasRecalculated ? "Apply" : "Recalc"}
           </button>
-
-          {/* divider */}
-          <div className="mx-2 h-6 w-px bg-neutral-800" />
-
-          {/* Paste buttons перенесены сюда */}
-          <button onClick={pasteLinkFromClipboard} className="px-3 h-8 rounded-md border border-neutral-800 hover:bg-neutral-900 text-xs">
-            Paste Link
-          </button>
-          <button onClick={pasteImageFromClipboard} className="px-3 h-8 rounded-md border border-neutral-800 hover:bg-neutral-900 text-xs">
-            Paste Image
-          </button>
-        </div>
-
-        {/* правая группа: Collect/Shuffle + divider + Zoom/Reset */}
-        <div className="ml-auto flex items-center gap-2">
-          {board === 'styleboard' ? (
-            <button
-              onClick={() => runHeavy('collect', collectFill)}
-              disabled={heavyBusy || heavyCooldown}
-              className={`px-3 h-8 rounded-md border text-xs ${
-                heavyBusy || heavyCooldown
-                  ? "opacity-50 cursor-not-allowed border-neutral-800 bg-neutral-900 text-neutral-500"
-                  : "border-emerald-700/50 text-emerald-300 hover:bg-neutral-900"
-              }`}
-            >
-              {heavyBusy ? "Collect…" : "Collect"}
-            </button>
-          ) : (
-              <button
-              onClick={() => runHeavy('shuffle', () =>
-                setItemsUndo(prev =>
-                  shuffleMoodboard(prev, WRef.current, HRef.current, moodShuffleIntensity)
-                )
-              )}
-                disabled={heavyBusy || heavyCooldown}
-                className={`px-3 h-8 rounded-md border text-xs ${
-                  heavyBusy || heavyCooldown
-                    ? "opacity-50 cursor-not-allowed border-neutral-800 bg-neutral-900 text-neutral-500"
-                    : "border-emerald-700/50 text-emerald-300 hover:bg-neutral-900"
-                }`}
-              >
-                {heavyBusy ? "Shuffle…" : "Shuffle"}
-              </button>
-          )}
-          
-          {board === 'moodboard' && (
-            <div className="ml-2 flex items-center gap-3">
-              <label className="inline-flex items-center gap-2 text-xs">
-                <span className="text-neutral-400">Intensity</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={moodShuffleIntensity}
-                  onChange={(e)=> setMoodShuffleIntensity(Number(e.target.value))}
-                  className="accent-emerald-500"
-                  title="Чем выше — тем больше разнообразие и меньше привязка к оригинальным аспектам"
-                />
-                <span className="w-6 text-right tabular-nums">{moodShuffleIntensity}</span>
-              </label>
-            </div>
-          )}
-
-          {/* divider перед зумом */}
-          <div className="h-6 w-px bg-neutral-800" />
-
-          {/* Zoom/Reset */}
-          <div className="flex items-center gap-1">
-            <button onClick={() => zoomAt(1/1.1)} className="w-8 h-8 rounded-md border border-neutral-800 hover:bg-neutral-900">−</button>
-          <div className="px-2 text-sm tabular-nums w-14 text-center">{Math.round(scale*100)}%</div>
-            <button onClick={() => zoomAt(1.1)} className="w-8 h-8 rounded-md border border-neutral-800 hover:bg-neutral-900">+</button>
-            <button onClick={() => { setCam({ scale: 1, tx: 0, ty: 0 }); setShouldCenter(true); }} className="ml-2 px-2 h-8 rounded-md border border-neutral-800 hover:bg-neutral-900 text-xs">Reset</button>
-
-            {/* divider слева как у zoom */}
-            <div className="h-6 w-px bg-neutral-800 mx-2" />
-
-            <button
-              onClick={async () => {
-                const p = prompt('Database password:') || '';
-                if (!p) return;
-
-                passRef.current = p;
-                sessionStorage.setItem('sb:pass', p);
-                remoteReadyRef.current = true;
-
-                // апгрейд idb:// → data:
-                const upgraded = await upgradeIdbUrls(itemsRef.current);
-                if (upgraded !== itemsRef.current) {
-                  setItems(upgraded);
-                  itemsRef.current = upgraded; // критично: обновили ref вручную, не ждём следующего тика
-                }
-
-                try {
-                  await flushToCloudNow(p);     // шлём уже по актуальному ref
-                  alert('Синхронизировано в БД');
-                } catch (e:any) {
-                  alert('Ошибка синхронизации в БД: ' + (e?.message || e));
-                }
-              }}
-              className="px-3 h-8 rounded-md text-xs border border-neutral-200 bg-neutral-200 text-neutral-900 hover:bg-white"
-              title="Сохранить текущее состояние в БД (пароль обязателен)"
-            >
-              Write to DB
-            </button>
+          <div className="sb-toolbar-separator" aria-hidden="true" />
+          <div className="sb-toolbar-zoom" role="group" aria-label="Canvas zoom">
+            <button aria-label="Zoom out" title="Zoom out" onClick={() => zoomAt(1/1.1)} className="sb-btn sb-btn-ghost sb-toolbar-zoom-button"><ZoomOut size={15} aria-hidden="true" /></button>
+            <span className="sb-toolbar-zoom-value">{Math.round(scale*100)}%</span>
+            <button aria-label="Zoom in" title="Zoom in" onClick={() => zoomAt(1.1)} className="sb-btn sb-btn-ghost sb-toolbar-zoom-button"><ZoomIn size={15} aria-hidden="true" /></button>
           </div>
         </div>
+
+      </div>
+
+      {/* Floating tool dock keeps creation and canvas actions together. */}
+      <div className="sb-tool-dock fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-xl border px-2 py-2" role="toolbar" aria-label="Board tools">
+        <div className="sb-dock-group" role="group" aria-label="Add media">
+          <div className="sb-add-menu" ref={mediaMenuRef}>
+            <button type="button" className="sb-btn sb-btn-primary sb-dock-add" aria-haspopup="menu" aria-expanded={mediaMenuOpen} onClick={() => setMediaMenuOpen(open => !open)}>
+              <Plus size={16} aria-hidden="true" />
+              <span>Add media</span>
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+            {mediaMenuOpen && (
+              <div className="sb-media-menu" role="menu" aria-label="Add media options">
+                <label className="sb-media-menu-item" role="menuitem">
+                  <ImagePlus size={16} aria-hidden="true" />
+                  <span>Upload image or video</span>
+                  <input type="file" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime" className="sr-only" onChange={async e => { const file = e.currentTarget.files?.[0]; if (file) await addImageBlob(file); e.currentTarget.value = ''; setMediaMenuOpen(false); }} />
+                </label>
+                <button type="button" role="menuitem" className="sb-media-menu-item" onClick={async () => { setMediaMenuOpen(false); await pasteImageFromClipboard(); }}>
+                  <ClipboardPaste size={16} aria-hidden="true" />
+                  <span>Paste image from clipboard</span>
+                </button>
+              </div>
+            )}
+          </div>
+          <button aria-label="Paste link from clipboard" title="Paste link" onClick={pasteLinkFromClipboard} className="sb-btn sb-btn-ghost sb-dock-icon"><Link2 size={16} aria-hidden="true" /></button>
+        </div>
+
+        <div className="sb-dock-separator" aria-hidden="true" />
+
+        <div className="sb-dock-group" role="group" aria-label="Arrange board">
+          {board === 'styleboard' ? (
+            <button aria-label="Collect items" title="Collect items" onClick={() => runHeavy('collect', collectFill)} disabled={heavyBusy || heavyCooldown} className="sb-btn sb-btn-secondary sb-dock-action">
+              <Combine size={16} aria-hidden="true" /><span>{heavyBusy ? 'Collecting…' : 'Collect'}</span>
+            </button>
+          ) : (
+            <button aria-label="Shuffle layout" title="Shuffle layout" onClick={() => runHeavy('shuffle', () => setItemsUndo(prev => shuffleMoodboard(prev, WRef.current, HRef.current, moodShuffleIntensity)))} disabled={heavyBusy || heavyCooldown} className="sb-btn sb-btn-destructive sb-dock-action">
+              <Shuffle size={16} aria-hidden="true" /><span>{heavyBusy ? 'Shuffling…' : 'Shuffle'}</span>
+            </button>
+          )}
+          {board === 'moodboard' && (
+            <div className="sb-intensity-group" role="group" aria-label="Moodboard shuffle intensity" title="Higher values add more size variety and loosen the match to each item's original aspect ratio">
+              <button type="button" className="sb-btn sb-btn-ghost sb-intensity-step" aria-label="Decrease shuffle intensity by 10" title="Decrease intensity by 10" disabled={moodShuffleIntensity <= 0} onClick={() => { setIntensityDraft(null); setMoodShuffleIntensity(value => Math.max(0, value - 10)); }}><Minus size={14} aria-hidden="true" /></button>
+              <input
+                className="sb-intensity-input"
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                aria-label="Shuffle intensity from 0 to 100"
+                value={intensityDraft ?? String(moodShuffleIntensity)}
+                onChange={e => setIntensityDraft(e.target.value)}
+                onBlur={e => { if (intensityDraft !== null) commitIntensityDraft(e.currentTarget.value); }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitIntensityDraft(e.currentTarget.value); e.currentTarget.blur(); } }}
+              />
+              <button type="button" className="sb-btn sb-btn-ghost sb-intensity-step" aria-label="Increase shuffle intensity by 10" title="Increase intensity by 10" disabled={moodShuffleIntensity >= 100} onClick={() => { setIntensityDraft(null); setMoodShuffleIntensity(value => Math.min(100, value + 10)); }}><Plus size={14} aria-hidden="true" /></button>
+            </div>
+          )}
+        </div>
+
+        <div className="sb-dock-separator" aria-hidden="true" />
+
+        <div className="sb-dock-group" role="group" aria-label="View actions">
+          <button aria-label="Reset view" title="Reset view" onClick={() => { setCam({ scale: 1, tx: 0, ty: 0 }); setShouldCenter(true); }} className="sb-btn sb-btn-destructive sb-dock-icon"><RotateCcw size={16} aria-hidden="true" /></button>
+        </div>
+
+        <div className="sb-dock-separator" aria-hidden="true" />
+
+        <button
+          aria-label={savingBoard ? "Saving board to database" : "Save board to database"}
+          title={savingBoard ? "Saving board" : "Save board to database"}
+          disabled={savingBoard}
+          aria-busy={savingBoard}
+          onClick={async () => {
+            if (savingBoard) return;
+            const p = prompt('Database password:') || '';
+            if (!p) return;
+            setSavingBoard(true);
+            passRef.current = p;
+            sessionStorage.setItem('sb:pass', p);
+            remoteReadyRef.current = true;
+            try {
+              const upgraded = await upgradeIdbUrls(itemsRef.current);
+              if (upgraded !== itemsRef.current) { setItems(upgraded); itemsRef.current = upgraded; }
+              await flushToCloudNow(p);
+              alert('Board synced to the database.');
+            } catch (e:any) {
+              alert('Database sync failed: ' + (e?.message || e));
+            } finally {
+              setSavingBoard(false);
+            }
+          }}
+          className="sb-btn sb-dock-action sb-save-button"
+        >{savingBoard ? <LoaderCircle size={16} className="animate-spin" aria-hidden="true" /> : <Save size={16} aria-hidden="true" />}<span>{savingBoard ? 'Saving…' : 'Save'}</span></button>
       </div>
 
       {/* Progress bar under topbar */}
       {heavyBusy && (
-        <div className="fixed top-[52px] left-0 right-0 z-40 h-2">
+        <div className="fixed top-[64px] left-0 right-0 z-40 h-2">
           <div className="h-full sb-progress" />
         </div>
       )}
 
       {/* Canvas */}
-      <div ref={containerRef} className="absolute inset-0 pt-[52px] overflow-hidden touch-none">
+      <div ref={containerRef} className="absolute inset-0 pt-[68px] overflow-hidden touch-none">
         <div
-          className="relative overflow-hidden will-change-transform bg-neutral-950"
+              className="sb-canvas relative overflow-hidden will-change-transform bg-neutral-950"
           style={{
             width: canvasW,
             height: canvasH,
             transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
             transformOrigin: "0 0",
-            isolation: 'isolate' // свой стек для надёжного z-index
+            isolation: 'isolate' // isolate stacking context for reliable z-index
           }}
         >
-          {/* Подсказка на артборде */}
-          {items.length === 0 && (
-            <div className="pointer-events-none absolute inset-0 grid place-items-center">
-              <div className="text-neutral-500 text-sm md:text-base">
-                {board==='moodboard'
-                  ? <>Нажмите <span className="px-1 rounded bg-neutral-800 text-neutral-200">Ctrl/Cmd + V</span> — вставьте картинку, ссылку на неё или прямую ссылку на HTML5-видео</>
-                  : <>Нажмите <span className="px-1 rounded bg-neutral-800 text-neutral-200">Ctrl/Cmd + V</span> — вставьте картинку или прямую ссылку на сайт / картинку / HTML5-видео</>
-                }
-              </div>
-            </div>
-          )}
-
           {items.map((it) => (
             <Tile 
               key={it.id} 
@@ -2584,9 +2582,24 @@ function AppInner() {
           ))}
         </div>
 
-        <div className="pointer-events-none fixed bottom-3 left-1/2 -translate-x-1/2 text-xs text-neutral-400 bg-neutral-900/70 px-2.5 py-1 rounded-full border border-neutral-800">
-          <span className="px-1 rounded bg-neutral-800 text-neutral-200">Space</span> и тяни — панорамирование  • <span className="px-1 rounded bg-neutral-800 text-neutral-200">Ctrl/Cmd</span> + колесо — Зум
-        </div>
+        {/* Keep empty-state help centered in the visible viewport, independent of board zoom. */}
+        {items.length === 0 && (
+          <div className="pointer-events-none absolute top-[68px] right-0 bottom-0 left-0 grid place-items-center">
+            <div className="sb-empty text-sm md:text-base">
+              <strong className="sb-empty-title">Paste an image or link to add your first item</strong>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + V</kbd> Paste an image, image link, or video link</span>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + Z</kbd> Undo</span>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + Shift + Z</kbd> or <kbd className="sb-kbd">Ctrl + Y</kbd> Redo</span>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + +</kbd> Zoom in</span>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + −</kbd> Zoom out</span>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + 0</kbd> Reset view</span>
+              <span><kbd className="sb-kbd">Space</kbd> or <kbd className="sb-kbd">Ctrl</kbd> + drag to pan</span>
+              <span><kbd className="sb-kbd">Ctrl/Cmd + scroll</kbd> Zoom at cursor</span>
+              <span><kbd className="sb-kbd">A</kbd> Approve the last item</span>
+              <span><kbd className="sb-kbd">Delete</kbd> or <kbd className="sb-kbd">Backspace</kbd> Remove the last item</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Toast */}
@@ -2594,9 +2607,7 @@ function AppInner() {
         <div
           className={`
             fixed bottom-4 right-4 z-[100] px-3.5 py-2 text-sm rounded-md border shadow-lg
-            ${toast.kind==='ok'
-              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-600/40'
-              : 'bg-red-500/15 text-red-300 border-red-600/40'}
+            sb-toast ${toast.kind==='ok' ? 'sb-toast-success' : 'sb-toast-error'}
           `}
         >
           {toast.text}
@@ -2726,7 +2737,7 @@ function Tile({
 
   // подтверждение удаления
   async function handleDelete() {
-    if (window.confirm("Удалить материал?")) {
+        if (window.confirm("Delete this item?")) {
       await maybeDeleteIdb(item.url);
       onDelete(item.id);
     }
@@ -2789,8 +2800,8 @@ function Tile({
       className={
         "group absolute overflow-hidden " +
         (isMoodboard
-          ? "bg-black"
-          : "rounded-xl border border-neutral-800 bg-neutral-900 shadow-lg " +
+          ? "sb-tile sb-tile-moodboard bg-black"
+          : "sb-tile rounded-xl border border-neutral-800 bg-neutral-900 shadow-lg " +
             (item.approved ? "ring-4 ring-emerald-500" : ""))
       }
     >
@@ -2799,37 +2810,33 @@ function Tile({
         className="pointer-events-none absolute top-2 left-2 right-2 z-10 flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity"
         style={{ transform: `scale(${1/scale})`, transformOrigin: 'top right' }}
       >
-        <div className="pointer-events-auto flex items-center gap-1 px-1.5 py-1 rounded-md bg-neutral-950/70 backdrop-blur border border-neutral-800">
+        <div className="sb-tile-hud pointer-events-auto flex items-center gap-1 px-1.5 py-1 rounded-md bg-neutral-950/70 backdrop-blur border border-neutral-800">
           {/* copy link icon */}
           <button
             onClick={() => navigator.clipboard.writeText(item.url)}
-            title="Скопировать ссылку"
-            className="p-1 rounded hover:bg-neutral-800"
+            aria-label="Copy link"
+            title="Copy link"
+            className="sb-icon-btn p-1 rounded hover:bg-neutral-800"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 11a4 4 0 0 1 0-6l1-1a4 4 0 0 1 6 6l-1 1" />
-              <path d="M15 13a4 4 0 0 1 0 6l-1 1a4 4 0 0 1-6-6l1-1" />
-            </svg>
+            <Copy size={16} aria-hidden="true" />
           </button>
           {/* approve toggle (check) — теперь и для moodboard */}
           <button
             onClick={() => onApprove(item.id)}
+            aria-label={item.approved ? "Unapprove item" : "Approve item"}
             title={item.approved ? "Unapprove" : "Approve"}
-            className={`p-1 rounded hover:bg-neutral-800 ${item.approved ? "text-emerald-400" : ""}`}
+            className={`sb-icon-btn sb-icon-approve p-1 rounded hover:bg-neutral-800 ${item.approved ? "is-active" : ""}`}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
+            <Check size={16} aria-hidden="true" />
           </button>
           {/* delete (trash) */}
           <button
             onClick={handleDelete}
-            title="Удалить"
-            className="p-1 rounded hover:bg-neutral-800 text-red-400"
+            aria-label="Delete item"
+            title="Delete"
+            className="sb-icon-btn sb-icon-destructive p-1 rounded hover:bg-neutral-800 text-red-400"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 6h18" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
-            </svg>
+            <Trash2 size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -2858,17 +2865,7 @@ function Tile({
               onError={()=>setLoaded(true)}
             />
           ) : item.kind === "video" ? (
-            <video
-              src={item.url}
-              className="w-full h-full object-cover bg-black"
-              muted
-              loop
-              playsInline
-              autoPlay
-              // без controls — чтобы вёл себя как img
-              onLoadedMetadata={()=>setLoaded(true)}
-              onError={()=>setLoaded(true)}
-            />
+            <a href={item.url} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="sb-video-link flex h-full w-full items-center justify-center text-sm underline">Open video link ↗</a>
           ) : (
             <div className="absolute inset-x-0 top-[4px] bottom-[4px]">
               <iframe
@@ -2888,8 +2885,8 @@ function Tile({
               {/* Подсказка поверх, когда iframe неактивен или заблокирован панорамой/зумом */}
               {(!iframeActive || spaceHeld || ctrlHeld) && (
                 <div className="absolute bottom-1 left-1 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-                  <div className="px-3 py-1.5 text-xs rounded-md bg-neutral-950/70 border border-neutral-800 text-neutral-200">
-                    Двойной клик, чтобы активировать сайт во фрейме
+                  <div className="sb-iframe-hint px-3 py-1.5 text-xs rounded-md bg-neutral-950/70 border border-neutral-800 text-neutral-200">
+                    Double-click to activate this embedded site
                   </div>
                 </div>
               )}
@@ -2927,8 +2924,8 @@ function Tile({
 
 function Skeleton() {
   return (
-    <div className="absolute inset-0 bg-neutral-900 animate-pulse grid place-items-center">
-      <div className="w-24 h-24 rounded-full border-4 border-neutral-800 border-t-neutral-600 animate-spin" />
+    <div className="sb-skeleton absolute inset-0 bg-neutral-900 animate-pulse grid place-items-center">
+      <div className="sb-spinner w-24 h-24 rounded-full border-4 border-neutral-800 border-t-neutral-600 animate-spin" />
     </div>
   );
 }
@@ -2970,17 +2967,17 @@ export default function App() {
   // Проверка Chrome и показ системного уведомления
   useEffect(() => {
     if (allowed && !detectChrome()) {
-      showSystemNotification('Приложение протестировано только в Chrome. Возможны сбои в других браузерах.');
+      showSystemNotification('This app is tested in Chrome. Other browsers may behave differently.');
     }
   }, [allowed]);
 
   if (!allowed) {
     return (
-      <div className="h-screen w-screen bg-neutral-950 text-neutral-200 grid place-items-center">
-        <div className="px-4 py-3 rounded-lg border border-neutral-800 bg-neutral-900 shadow">
+    <div className="sb-system-screen h-screen w-screen bg-neutral-950 text-neutral-200 grid place-items-center">
+        <div className="sb-system-card px-4 py-3 rounded-lg border border-neutral-800 bg-neutral-900 shadow">
           <div className="text-lg font-semibold mb-1">Desktop only</div>
           <div className="text-sm text-neutral-400">
-            Это приложение поддерживает только десктопные браузеры. Откройте на компьютере.
+            This app supports desktop browsers only. Please open it on a computer.
           </div>
         </div>
       </div>
