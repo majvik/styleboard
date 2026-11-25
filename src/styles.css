@@ -93,14 +93,14 @@ button:focus-visible, input:focus-visible, label:has(input[type="file"]:focus-vi
 .sb-empty {
   display: grid; justify-items: start; gap: .25rem;
   width: max-content; max-width: min(92vw, 42rem);
-  color: hsl(var(--muted-foreground)); text-align: left; font-size: .8125rem; line-height: 1.6;
+  color: hsl(var(--muted-foreground)); text-align: left; font-size: .75rem; line-height: 1.55;
 }
-.sb-empty-title { justify-self: center; margin-bottom: .35rem; color: hsl(var(--foreground)); font-size: 1rem; font-weight: 500; text-align: center; }
+.sb-empty-title { justify-self: start; margin-bottom: .3rem; color: hsl(var(--foreground)); font-size: .9rem; font-weight: 500; text-align: left; }
 .sb-empty > span { display: block; }
 .sb-kbd {
   display: inline-flex; align-items: center; border: 1px solid hsl(var(--border));
   border-radius: calc(var(--radius) - 3px); background: hsl(var(--secondary));
-  padding: 0 .35rem; color: hsl(var(--foreground)); font: inherit; font-size: .9em;
+  padding: 0 .35rem; color: hsl(var(--foreground)); font: inherit; font-size: .85em;
 }
 .sb-help {
   color: hsl(var(--muted-foreground)); background: hsl(var(--popover) / .94);
@@ -110,6 +110,8 @@ button:focus-visible, input:focus-visible, label:has(input[type="file"]:focus-vi
 .sb-save-button { color: hsl(0 0% 98%); background: hsl(142 65% 30%); border-color: hsl(142 65% 30%); }
 .sb-save-button:hover:not(:disabled) { color: hsl(0 0% 100%); background: hsl(142 65% 36%); border-color: hsl(142 65% 36%); }
 .sb-save-button:disabled { color: hsl(0 0% 95% / .78); background: hsl(142 38% 26%); border-color: hsl(142 38% 26%); cursor: wait; }
+.sb-tool-dock .sb-reset-button { color: hsl(var(--destructive)); background: transparent; }
+.sb-tool-dock .sb-reset-button:hover:not(:disabled) { color: hsl(var(--destructive)); background: transparent; border-color: transparent; }
 .sb-tile { background: hsl(var(--card)); border-color: hsl(var(--border)); box-shadow: 0 4px 12px hsl(0 0% 0% / .24); }
 .sb-tile-moodboard { background: hsl(var(--card)); }
 .sb-tile-hud { background: hsl(var(--popover) / .94); border-color: hsl(var(--border)); color: hsl(var(--foreground)); box-shadow: 0 4px 12px hsl(0 0% 0% / .35); }

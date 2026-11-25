@@ -2482,7 +2482,7 @@ function AppInner() {
               <Combine size={16} aria-hidden="true" /><span>{heavyBusy ? 'Collecting…' : 'Collect'}</span>
             </button>
           ) : (
-            <button aria-label="Shuffle layout" title="Shuffle layout" onClick={() => runHeavy('shuffle', () => setItemsUndo(prev => shuffleMoodboard(prev, WRef.current, HRef.current, moodShuffleIntensity)))} disabled={heavyBusy || heavyCooldown} className="sb-btn sb-btn-destructive sb-dock-action">
+            <button aria-label="Shuffle layout" title="Shuffle layout" onClick={() => runHeavy('shuffle', () => setItemsUndo(prev => shuffleMoodboard(prev, WRef.current, HRef.current, moodShuffleIntensity)))} disabled={heavyBusy || heavyCooldown} className="sb-btn sb-btn-secondary sb-dock-action">
               <Shuffle size={16} aria-hidden="true" /><span>{heavyBusy ? 'Shuffling…' : 'Shuffle'}</span>
             </button>
           )}
@@ -2509,7 +2509,7 @@ function AppInner() {
         <div className="sb-dock-separator" aria-hidden="true" />
 
         <div className="sb-dock-group" role="group" aria-label="View actions">
-          <button aria-label="Reset view" title="Reset view" onClick={() => { setCam({ scale: 1, tx: 0, ty: 0 }); setShouldCenter(true); }} className="sb-btn sb-btn-destructive sb-dock-icon"><RotateCcw size={16} aria-hidden="true" /></button>
+          <button aria-label="Reset view" title="Reset view" onClick={() => { setCam({ scale: 1, tx: 0, ty: 0 }); setShouldCenter(true); }} className="sb-btn sb-btn-ghost sb-dock-icon sb-reset-button"><RotateCcw size={16} aria-hidden="true" /></button>
         </div>
 
         <div className="sb-dock-separator" aria-hidden="true" />
@@ -2585,7 +2585,7 @@ function AppInner() {
         {/* Keep empty-state help centered in the visible viewport, independent of board zoom. */}
         {items.length === 0 && (
           <div className="pointer-events-none absolute top-[68px] right-0 bottom-0 left-0 grid place-items-center">
-            <div className="sb-empty text-sm md:text-base">
+            <div className="sb-empty">
               <strong className="sb-empty-title">Paste an image or link to add your first item</strong>
               <span><kbd className="sb-kbd">Ctrl/Cmd + V</kbd> Paste an image, image link, or video link</span>
               <span><kbd className="sb-kbd">Ctrl/Cmd + Z</kbd> Undo</span>
